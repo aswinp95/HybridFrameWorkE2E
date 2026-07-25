@@ -46,7 +46,7 @@ public class LoginSteps {
 	@Then("User should see result {string}")
 	public void user_should_see_result(String expectedResult) {
 	    if (expectedResult.equals("Products")) {
-	        Assert.assertEquals(productsPage.getTitle(), expectedResult);
+	    	Assert.assertEquals(productsPage.getTitle(), expectedResult);
 	    } else {
 	        Assert.assertEquals(loginPage.getErrorMessage(), expectedResult);
 	    }

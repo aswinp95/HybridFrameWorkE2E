@@ -1,5 +1,6 @@
 package com.qa.tests.hooks;
-
+import io.cucumber.java.Scenario;
+import com.qa.framework.utils.ScreenshotUtil;
 import java.time.Duration;
 
 import org.apache.logging.log4j.LogManager;
@@ -28,10 +29,14 @@ public class Hooks {
 	}
 	
 	@After
-	public void tearDown() {
-		// Runs after EVERY scenario, pass or fail - the browser always closes
-		DriverFactory.quitDriver();
-		log.info("Driver Quit for thread: {}", Thread.currentThread().threadId());
+	public void tearDown(Scenario scenario) {
+	    if (scenario.isFailed()) {
+	        WebDriver driver = DriverFactory.getDriver();
+	        ScreenshotUtil.attachScreenshot(driver, scenario.getName());
+	        log.warn("Scenario failed: {}. Screenshot captured.", scenario.getName());
+	    }
+	    DriverFactory.quitDriver();
+	    log.info("Driver Quit for thread: {}", Thread.currentThread().threadId());
 	}
 
 }
