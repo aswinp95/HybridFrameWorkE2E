@@ -15,7 +15,21 @@ pipeline {
 
         stage('Start Selenium Grid') {
             steps {
+                bat 'docker-compose down || exit 0'
                 bat 'docker-compose up -d'
+                bat '''
+                    echo Waiting for Selenium Grid to be ready...
+                    powershell -Command ^
+                    "$maxAttempts = 20; $attempt = 0; $ready = $false; ^
+                    while ($attempt -lt $maxAttempts -and -not $ready) { ^
+                        try { ^
+                            $response = Invoke-WebRequest -Uri http://localhost:4444/wd/hub/status -UseBasicParsing -TimeoutSec 2; ^
+                            if ($response.StatusCode -eq 200) { $ready = $true } ^
+                        } catch {} ^
+                        if (-not $ready) { Start-Sleep -Seconds 2; $attempt++ } ^
+                    } ^
+                    if (-not $ready) { throw 'Selenium Grid did not become ready in time' }"
+                '''
             }
         }
 
