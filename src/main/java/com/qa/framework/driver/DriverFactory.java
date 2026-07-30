@@ -3,7 +3,7 @@ package com.qa.framework.driver;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.openqa.selenium.UnexpectedAlertBehaviour;
+import org.openqa.selenium.MutableCapabilities;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
@@ -11,6 +11,15 @@ import org.openqa.selenium.firefox.FirefoxDriver;
 import org.openqa.selenium.firefox.FirefoxOptions;
 import org.openqa.selenium.edge.EdgeDriver;
 import org.openqa.selenium.edge.EdgeOptions;
+import org.openqa.selenium.remote.RemoteWebDriver;
+import org.openqa.selenium.UnexpectedAlertBehaviour;
+
+import com.qa.framework.config.ConfigReader;
+
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * DriverFactory: the single gateway through which every test/page gets its WebDriver.
@@ -22,64 +31,122 @@ import org.openqa.selenium.edge.EdgeOptions;
  *     browser session. ThreadLocal gives us "one instance per thread" which is the
  *     correct interpretation of Singleton in a multi-threaded test framework.
  *  2. Factory Pattern -> createDriver() decides WHICH concrete WebDriver
- *     implementation (Chrome/Firefox/Edge) to instantiate based on a runtime
- *     parameter, so calling code never uses `new ChromeDriver()` directly.
+ *     implementation (Chrome/Firefox/Edge, LOCAL, REMOTE via BrowserStack, or DOCKER
+ *     via a local Selenium Grid container) to instantiate based on runtime config,
+ *     so calling code never uses `new ChromeDriver()` directly.
+ *
+ *  Execution modes, controlled by ConfigReader.getExecutionEnv():
+ *   - "local"  -> real browser launched directly on this machine
+ *   - "remote" -> RemoteWebDriver pointed at BrowserStack's cloud hub
+ *   - "docker" -> RemoteWebDriver pointed at a local Selenium Grid container
+ *                 (see docker-compose.yml). Currently Chrome-only, since the
+ *                 container only registers a Chrome node — a Firefox/Edge node
+ *                 would need its own service added to docker-compose.yml.
  */
 public class DriverFactory {
 
     private static final Logger log = LogManager.getLogger(DriverFactory.class);
 
-    // ThreadLocal<WebDriver>: each thread that calls .set() gets its OWN copy,
-    // invisible to other threads, even though they're all calling the same
-    // static field. This is the crux of thread-safe parallel execution.
     private static final ThreadLocal<WebDriver> driverThreadLocal = new ThreadLocal<>();
 
-    // Private constructor: prevents `new DriverFactory()` from outside this class,
-    // reinforcing that this class is meant to be used only via its static methods.
+    private static final String DOCKER_GRID_URL = "http://localhost:4444/wd/hub";
+
     private DriverFactory() {
     }
 
-    /**
-     * Factory method: creates a browser instance based on the given browser name.
-     * Called once per test method (per thread) from a TestNG @BeforeMethod or
-     * a Cucumber @Before hook.
-     */
     public static void createDriver(String browser) {
         log.info("Creating WebDriver instance for browser: {}", browser);
 
         WebDriver driver;
+        String executionEnv = ConfigReader.getExecutionEnv();
 
-        // Java 14+ enhanced switch expression — cleaner than old-style switch-case
-        // with fall-through risk.
-        driver = switch (browser.toLowerCase()) {
-            case "chrome" -> {
-                WebDriverManager.chromedriver().setup();
-                ChromeOptions options = new ChromeOptions();
-                options.addArguments("--remote-allow-origins=*");
-                options.setUnhandledPromptBehaviour(UnexpectedAlertBehaviour.IGNORE);
-                yield new ChromeDriver(options);
-            }
-            case "firefox" -> {
-                WebDriverManager.firefoxdriver().setup();
-                yield new FirefoxDriver(new FirefoxOptions());
-            }
-            case "edge" -> {
-                WebDriverManager.edgedriver().setup();
-                yield new EdgeDriver(new EdgeOptions());
-            }
-            default -> throw new IllegalArgumentException(
-                    "Unsupported browser: " + browser + ". Supported: chrome, firefox, edge");
-        };
+        if (executionEnv.equalsIgnoreCase("remote")) {
+            driver = createRemoteDriver(browser);
+        } else if (executionEnv.equalsIgnoreCase("docker")) {
+            driver = createDockerDriver(browser);
+        } else {
+            driver = switch (browser.toLowerCase()) {
+                case "chrome" -> {
+                    WebDriverManager.chromedriver().setup();
+                    ChromeOptions options = new ChromeOptions();
+                    options.addArguments("--remote-allow-origins=*");
+                    options.setUnhandledPromptBehaviour(UnexpectedAlertBehaviour.IGNORE);
+                    yield new ChromeDriver(options);
+                }
+                case "firefox" -> {
+                    WebDriverManager.firefoxdriver().setup();
+                    yield new FirefoxDriver(new FirefoxOptions());
+                }
+                case "edge" -> {
+                    WebDriverManager.edgedriver().setup();
+                    yield new EdgeDriver(new EdgeOptions());
+                }
+                default -> throw new IllegalArgumentException(
+                        "Unsupported browser: " + browser + ". Supported: chrome, firefox, edge");
+            };
+        }
 
         driverThreadLocal.set(driver);
         log.info("WebDriver instance bound to thread: {}", Thread.currentThread().getId());
     }
 
     /**
-     * Every page/test calls THIS to get the driver — never a static shared field.
-     * Because it reads from ThreadLocal, each thread transparently gets its own
-     * instance despite calling the exact same method.
+     * Builds a RemoteWebDriver pointed at BrowserStack's hub, using credentials
+     * read from environment variables — NEVER hardcoded, NEVER committed to Git.
      */
+    private static WebDriver createRemoteDriver(String browser) {
+        String username = System.getenv("BROWSERSTACK_USERNAME");
+        String accessKey = System.getenv("BROWSERSTACK_ACCESS_KEY");
+
+        if (username == null || accessKey == null) {
+            throw new IllegalStateException(
+                    "BROWSERSTACK_USERNAME or BROWSERSTACK_ACCESS_KEY environment variable "
+                    + "is not set. Set them as Windows environment variables and restart your IDE.");
+        }
+
+        String hubUrl = "https://" + username + ":" + accessKey + "@hub-cloud.browserstack.com/wd/hub";
+
+        MutableCapabilities capabilities = new MutableCapabilities();
+        capabilities.setCapability("browserName", browser);
+
+        Map<String, Object> bstackOptions = new HashMap<>();
+        bstackOptions.put("os", "Windows");
+        bstackOptions.put("osVersion", "11");
+        bstackOptions.put("sessionName", "HybridFramework Test Run");
+        bstackOptions.put("buildName", "HybridFramework Build 1");
+        capabilities.setCapability("bstack:options", bstackOptions);
+
+        try {
+            log.info("Connecting to BrowserStack hub for browser: {}", browser);
+            return new RemoteWebDriver(new URL(hubUrl), capabilities);
+        } catch (MalformedURLException e) {
+            throw new RuntimeException("Invalid BrowserStack hub URL: " + hubUrl, e);
+        }
+    }
+
+    /**
+     * Builds a RemoteWebDriver pointed at the local Selenium Grid container
+     * started via `docker-compose up -d`. No credentials needed — this is
+     * purely local infrastructure, not a shared cloud service.
+     */
+    private static WebDriver createDockerDriver(String browser) {
+        if (!browser.equalsIgnoreCase("chrome")) {
+            throw new IllegalArgumentException(
+                    "Docker execution currently only supports Chrome — the running "
+                    + "container only registers a Chrome node. Requested browser: " + browser);
+        }
+
+        ChromeOptions options = new ChromeOptions();
+        options.setUnhandledPromptBehaviour(UnexpectedAlertBehaviour.IGNORE);
+
+        try {
+            log.info("Connecting to local Docker Selenium Grid at: {}", DOCKER_GRID_URL);
+            return new RemoteWebDriver(new URL(DOCKER_GRID_URL), options);
+        } catch (MalformedURLException e) {
+            throw new RuntimeException("Invalid Docker Grid URL: " + DOCKER_GRID_URL, e);
+        }
+    }
+
     public static WebDriver getDriver() {
         WebDriver driver = driverThreadLocal.get();
         if (driver == null) {
@@ -90,17 +157,12 @@ public class DriverFactory {
         return driver;
     }
 
-    /**
-     * Cleanup — MUST be called after every test/scenario. If you skip this,
-     * ThreadLocal still holds a reference to the WebDriver even after the thread
-     * returns to the pool for reuse on the next test — classic memory leak source.
-     */
     public static void quitDriver() {
         WebDriver driver = driverThreadLocal.get();
         if (driver != null) {
             log.info("Quitting WebDriver for thread: {}", Thread.currentThread().getId());
             driver.quit();
-            driverThreadLocal.remove(); // critical: detach reference, not just null it
+            driverThreadLocal.remove();
         }
     }
 }

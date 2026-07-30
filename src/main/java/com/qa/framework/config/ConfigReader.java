@@ -26,6 +26,10 @@ public class ConfigReader {
                     + ". Did you pass the correct -Denv flag?", e);
         }
     }
+    
+    public static String getExecutionEnv() {
+        return System.getProperty("executionEnv", properties.getProperty("executionEnv"));
+    }
 
     public static String getBrowser() {
         return properties.getProperty("browser");
