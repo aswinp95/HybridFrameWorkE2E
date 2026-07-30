@@ -27,10 +27,7 @@ public class ConfigReader {
         }
     }
     
-    public static String getExecutionEnv() {
-        return System.getProperty("executionEnv", properties.getProperty("executionEnv"));
-    }
-
+   
     public static String getBrowser() {
         return properties.getProperty("browser");
     }
@@ -38,9 +35,8 @@ public class ConfigReader {
     public static String getPlaygroundUrl() {
     	return properties.getProperty("playgroundUrl");
     }
-
     public static String getExecutionEnv() {
-        return properties.getProperty("executionEnv");
+        return System.getProperty("executionEnv", properties.getProperty("executionEnv"));
     }
 
     public static String getBaseUrl() {
